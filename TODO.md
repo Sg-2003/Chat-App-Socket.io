@@ -1,3 +1,13 @@
-# TODO: Fix Logo and Search Icon Position in Sidebar
+# TODO: Display Logged-in User's Name in Sidebar
 
-- [x] Restructure Sidebar.jsx to separate fixed header (logo and search) from scrollable chat list using flexbox layout
+## Tasks
+
+- [x] Import AuthContext in Sidebar.jsx
+- [x] Use useContext to access authUser from AuthContext
+- [x] Display authUser.fullName in the sidebar UI (e.g., near the logo or in a user info section)
+- [x] Ensure the name displays only when user is logged in (authUser is not null)
+
+## Followup Steps
+
+- [ ] Test the sidebar display on login
+- [ ] Verify the name appears correctly and doesn't break layout

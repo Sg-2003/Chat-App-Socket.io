@@ -27,8 +27,10 @@ io.on("connection", (socket) => {
 
     if (userId) userSocketMap[userId] = socket.id;
 
-    //Emit online users to all connected clients
-    io.emit("getOnlineUsers", Object.keys(userSocketMap));
+    // Emit updated online users: send current list directly to this client first (ensures new connection receives list),
+    // then broadcast to others so everyone stays in sync.
+    socket.emit("getOnlineUsers", Object.keys(userSocketMap));
+    socket.broadcast.emit("getOnlineUsers", Object.keys(userSocketMap));
 
     socket.on("disconnect", () => {
         console.log("User Disconnected", userId, "socketId:", socket.id);

@@ -10,6 +10,8 @@ export const ChatProvider = ({ children }) => {
     const [lastMessagedAt, setLastMessagedAt] = useState({});
     const [selectedUser, setSelectedUser] = useState(null);
     const [unseenMessages, setUnseenMessages] = useState({});
+    const [showRightSidebar, setShowRightSidebar] = useState(false);
+    const [deletingUserId, setDeletingUserId] = useState(null);
 
     const { socket, axios } = useContext(AuthContext);
 
@@ -29,7 +31,7 @@ export const ChatProvider = ({ children }) => {
         } catch (error) {
             toast.error(error.response?.data?.message || error.message);
         }
-    }, [axios])
+    }, [axios, lastMessagedAt])
 
     //function to get messages for selected user
     const getMessages = useCallback(async (userId) => {
@@ -55,23 +57,69 @@ export const ChatProvider = ({ children }) => {
             const { data } = await axios.post(`/api/messages/send/${selectedUser._id}`, messageData);
             if (data.success) {
                 setMessages((prevMessages) => [...prevMessages, data.newMessage])
-                // Update last messaged time and sort users
+                // Update last messaged time and sort users using the updated timestamps map
                 const now = Date.now();
-                setLastMessagedAt(prev => ({ ...prev, [selectedUser._id]: now }));
-                setUsers(prevUsers => {
-                    return [...prevUsers].sort((a, b) => {
-                        const aTime = a._id === selectedUser._id ? now : (lastMessagedAt[a._id] || 0);
-                        const bTime = b._id === selectedUser._id ? now : (lastMessagedAt[b._id] || 0);
-                        return bTime - aTime; // Most recent first
+                setLastMessagedAt(prev => {
+                    const updated = { ...prev, [selectedUser._id]: now };
+                    setUsers(prevUsers => {
+                        return [...prevUsers].sort((a, b) => {
+                            const aTime = a._id === selectedUser._id ? now : (updated[a._id] || 0);
+                            const bTime = b._id === selectedUser._id ? now : (updated[b._id] || 0);
+                            return bTime - aTime; // Most recent first
+                        });
                     });
+                    return updated;
                 });
+                // Reset unseen message count for the recipient in local UI
+                setUnseenMessages(prev => ({ ...prev, [selectedUser._id]: 0 }));
+                // Notify the user that the message was sent
+                toast.success(`Message sent to ${selectedUser.fullName}`);
             } else {
                 toast.error(data.message);
             }
         } catch (error) {
             toast.error(error.response?.data?.message || error.message);
         }
-    }, [axios, selectedUser])
+    }, [axios, selectedUser, setUnseenMessages])
+
+    //function to delete chat with selected user
+    const deleteChat = useCallback(async (userId) => {
+        try {
+            if (!axios) throw new Error('No axios instance');
+            console.log('Deleting chat for userId:', userId);
+            setDeletingUserId(userId);
+            const { data } = await axios.delete(`/api/messages/delete/${userId}`);
+            console.log('Delete response:', data);
+            if (data.success) {
+                // If no messages were deleted, still refresh to ensure ordering is updated
+                if (data.deletedCount === 0) {
+                    toast('No messages found to delete (already cleared). Refreshing view.', { icon: 'ℹ️' });
+                } else {
+                    toast.success('Chat deleted successfully');
+                }
+                // Clear local conversation-specific state
+                setUnseenMessages(prev => ({ ...prev, [userId]: 0 }));
+                setLastMessagedAt(prev => {
+                    const copy = { ...prev };
+                    delete copy[userId];
+                    return copy;
+                });
+                if (selectedUser && String(selectedUser._id) === String(userId)) {
+                    setSelectedUser(null);
+                    setMessages([]);
+                }
+                // Refresh sidebar ordering and unseen counts from server
+                await getUsers();
+            } else {
+                toast.error(data.message);
+            }
+        } catch (error) {
+            console.error('Error deleting chat', error);
+            toast.error(error.response?.data?.message || error.message || 'Delete failed');
+        } finally {
+            setDeletingUserId(null);
+        }
+    }, [axios, selectedUser, getUsers])
 
     // subscribe to socket messages and clean up the specific handler
     useEffect(() => {
@@ -79,24 +127,39 @@ export const ChatProvider = ({ children }) => {
 
         const handler = (newMessage) => {
             try {
+                const now = Date.now();
                 if (selectedUser && newMessage.senderId === selectedUser._id) {
                     newMessage.seen = true;
                     setMessages((prevMessages) => [...prevMessages, newMessage]);
                     axios?.put(`/api/messages/mark/${newMessage._id}`).catch(() => { });
+                    // Update last messaged time and resort users using updated map
+                    setLastMessagedAt(prev => {
+                        const updated = { ...prev, [newMessage.senderId]: now };
+                        setUsers(prevUsers => {
+                            return [...prevUsers].sort((a, b) => {
+                                const aTime = a._id === newMessage.senderId ? now : (updated[a._id] || 0);
+                                const bTime = b._id === newMessage.senderId ? now : (updated[b._id] || 0);
+                                return bTime - aTime; // Most recent first
+                            });
+                        });
+                        return updated;
+                    });
                 } else {
                     setUnseenMessages((prevUnseenMessages) => ({
                         ...prevUnseenMessages,
                         [newMessage.senderId]: prevUnseenMessages[newMessage.senderId] ? prevUnseenMessages[newMessage.senderId] + 1 : 1
-                    }))
+                    }));
                     // Update last messaged time and sort users for received message
-                    const now = Date.now();
-                    setLastMessagedAt(prev => ({ ...prev, [newMessage.senderId]: now }));
-                    setUsers(prevUsers => {
-                        return [...prevUsers].sort((a, b) => {
-                            const aTime = a._id === newMessage.senderId ? now : (lastMessagedAt[a._id] || 0);
-                            const bTime = b._id === newMessage.senderId ? now : (lastMessagedAt[b._id] || 0);
-                            return bTime - aTime; // Most recent first
+                    setLastMessagedAt(prev => {
+                        const updated = { ...prev, [newMessage.senderId]: now };
+                        setUsers(prevUsers => {
+                            return [...prevUsers].sort((a, b) => {
+                                const aTime = a._id === newMessage.senderId ? now : (updated[a._id] || 0);
+                                const bTime = b._id === newMessage.senderId ? now : (updated[b._id] || 0);
+                                return bTime - aTime; // Most recent first
+                            });
                         });
+                        return updated;
                     });
                     // Show notification for new message
                     toast.success(`New message from ${newMessage.senderName || 'someone'}`);
@@ -107,11 +170,35 @@ export const ChatProvider = ({ children }) => {
             }
         };
 
+        const handleChatDeleted = ({ deletedBy, partnerId: payloadPartnerId }) => {
+            try {
+                const partnerId = String(payloadPartnerId || deletedBy);
+                // reset unseen and timestamps for that partner
+                setUnseenMessages(prev => ({ ...prev, [partnerId]: 0 }));
+                setLastMessagedAt(prev => {
+                    const copy = { ...prev };
+                    delete copy[partnerId];
+                    return copy;
+                });
+                // if currently viewing that partner, clear messages and deselect
+                if (selectedUser && String(selectedUser._id) === partnerId) {
+                    setSelectedUser(null);
+                    setMessages([]);
+                }
+                // refresh users to update ordering and unseen counts
+                getUsers();
+            } catch (err) {
+                console.error('Error handling chatDeleted', err);
+            }
+        };
+
         socket.on('newMessage', handler);
+        socket.on('chatDeleted', handleChatDeleted);
         return () => {
             socket.off('newMessage', handler);
+            socket.off('chatDeleted', handleChatDeleted);
         }
-    }, [socket, selectedUser, axios]);
+    }, [socket, selectedUser, axios, setUnseenMessages, getUsers]);
 
     const value = {
         messages,
@@ -120,9 +207,14 @@ export const ChatProvider = ({ children }) => {
         getUsers,
         getMessages,
         sendMessage,
+        deleteChat,
+        deletingUserId,
         setSelectedUser,
+        setUsers,
         unseenMessages,
         setUnseenMessages,
+        showRightSidebar,
+        setShowRightSidebar,
     }
     return (
         <ChatContext.Provider value={value}>
