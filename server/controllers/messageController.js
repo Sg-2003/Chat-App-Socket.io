@@ -91,17 +91,27 @@ export const sendMessage = async (req, res) => {
             const uploadResponse = await cloudinary.uploader.upload(image)
             imageUrl = uploadResponse.secure_url;
         }
-        const newMessage = await Message.create({
+        const newMessageDoc = await Message.create({
             senderId,
             receiverId,
             text,
             image: imageUrl
         })
 
-        // Emit the new message to the receiver's socket
-        const receiverSocketId = userSocketMap[receiverId];
+        // Convert to plain object and normalize id fields to strings to avoid client-side mismatches
+        const newMessage = newMessageDoc.toObject();
+        newMessage._id = String(newMessage._id);
+        newMessage.senderId = String(newMessage.senderId);
+        newMessage.receiverId = String(newMessage.receiverId);
+
+        // Emit the new message to receiver and sender (if connected) so both update via sockets
+        const receiverSocketId = userSocketMap[String(receiverId)];
+        const senderSocketId = userSocketMap[String(senderId)];
         if (receiverSocketId) {
-            io.to(receiverSocketId).emit("newMessage", newMessage)
+            io.to(receiverSocketId).emit("newMessage", newMessage);
+        }
+        if (senderSocketId) {
+            io.to(senderSocketId).emit("newMessage", newMessage);
         }
 
         res.json({

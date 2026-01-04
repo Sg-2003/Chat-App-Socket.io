@@ -13,7 +13,7 @@ export const ChatProvider = ({ children }) => {
     const [showRightSidebar, setShowRightSidebar] = useState(false);
     const [deletingUserId, setDeletingUserId] = useState(null);
 
-    const { socket, axios } = useContext(AuthContext);
+    const { socket, axios, authUser } = useContext(AuthContext);
 
     //function to get all users for sidebar
     const getUsers = useCallback(async () => {
@@ -127,40 +127,50 @@ export const ChatProvider = ({ children }) => {
 
         const handler = (newMessage) => {
             try {
+                // normalize ids to strings to avoid type mismatches between server and client
+                const senderId = String(newMessage.senderId);
                 const now = Date.now();
-                if (selectedUser && newMessage.senderId === selectedUser._id) {
+
+                // Ignore server echoes for messages we sent ourselves to avoid duplicates and wrong unseen counts
+                if (authUser && String(authUser._id) === senderId) return;
+
+                if (selectedUser && String(selectedUser._id) === senderId) {
                     newMessage.seen = true;
-                    setMessages((prevMessages) => [...prevMessages, newMessage]);
+                    setMessages((prevMessages) => prevMessages.some(m => String(m._id) === String(newMessage._id)) ? prevMessages : [...prevMessages, newMessage]);
                     axios?.put(`/api/messages/mark/${newMessage._id}`).catch(() => { });
                     // Update last messaged time and resort users using updated map
                     setLastMessagedAt(prev => {
-                        const updated = { ...prev, [newMessage.senderId]: now };
+                        const updated = { ...prev, [senderId]: now };
                         setUsers(prevUsers => {
                             return [...prevUsers].sort((a, b) => {
-                                const aTime = a._id === newMessage.senderId ? now : (updated[a._id] || 0);
-                                const bTime = b._id === newMessage.senderId ? now : (updated[b._id] || 0);
+                                const aTime = String(a._id) === senderId ? now : (updated[a._id] || 0);
+                                const bTime = String(b._id) === senderId ? now : (updated[b._id] || 0);
                                 return bTime - aTime; // Most recent first
                             });
                         });
                         return updated;
                     });
+                    // Refresh sidebar to reflect seen/unseen and ordering
+                    getUsers();
                 } else {
                     setUnseenMessages((prevUnseenMessages) => ({
                         ...prevUnseenMessages,
-                        [newMessage.senderId]: prevUnseenMessages[newMessage.senderId] ? prevUnseenMessages[newMessage.senderId] + 1 : 1
+                        [senderId]: prevUnseenMessages[senderId] ? prevUnseenMessages[senderId] + 1 : 1
                     }));
                     // Update last messaged time and sort users for received message
                     setLastMessagedAt(prev => {
-                        const updated = { ...prev, [newMessage.senderId]: now };
+                        const updated = { ...prev, [senderId]: now };
                         setUsers(prevUsers => {
                             return [...prevUsers].sort((a, b) => {
-                                const aTime = a._id === newMessage.senderId ? now : (updated[a._id] || 0);
-                                const bTime = b._id === newMessage.senderId ? now : (updated[b._id] || 0);
+                                const aTime = String(a._id) === senderId ? now : (updated[a._id] || 0);
+                                const bTime = String(b._id) === senderId ? now : (updated[b._id] || 0);
                                 return bTime - aTime; // Most recent first
                             });
                         });
                         return updated;
                     });
+                    // Refresh sidebar to reflect unseen counts and ordering
+                    getUsers();
                     // Show notification for new message
                     toast.success(`New message from ${newMessage.senderName || 'someone'}`);
                 }
@@ -194,9 +204,13 @@ export const ChatProvider = ({ children }) => {
 
         socket.on('newMessage', handler);
         socket.on('chatDeleted', handleChatDeleted);
+        // Also update sidebar when we receive onlineUsers update (helps ordering)
+        const handleOnline = () => getUsers();
+        socket.on('getOnlineUsers', handleOnline);
         return () => {
             socket.off('newMessage', handler);
             socket.off('chatDeleted', handleChatDeleted);
+            socket.off('getOnlineUsers', handleOnline);
         }
     }, [socket, selectedUser, axios, setUnseenMessages, getUsers]);
 
