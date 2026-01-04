@@ -7,7 +7,7 @@ import { ChatContext } from '../../context/ChatContextCore';
 const Sidebar = () => {
 
     const { getUsers, users, selectedUser, setSelectedUser,
-        unseenMessages, setUnseenMessages, deleteChat, deletingUserId } = useContext(ChatContext);
+        unseenMessages, setUnseenMessages, hideUser, hiddenUsers } = useContext(ChatContext);
 
     const { logout, onlineUsers, authUser } = useContext(AuthContext);
 
@@ -16,8 +16,8 @@ const Sidebar = () => {
 
     const navigate = useNavigate();
 
-    const filteredUsers = input.trim() ? users.filter(user =>
-        user.fullName.toLowerCase().includes(input.trim().toLowerCase())) : users;
+    const filteredUsers = (input.trim() ? users.filter(user =>
+        user.fullName.toLowerCase().includes(input.trim().toLowerCase())) : users).filter(user => !hiddenUsers.includes(user._id));
 
     useEffect(() => {
         if (authUser) getUsers();
@@ -82,10 +82,10 @@ const Sidebar = () => {
                             </div>
                             <button type='button' onClick={(e) => {
                                 e.stopPropagation();
-                                if (!confirm(`Delete chat with ${user.fullName}? This will remove all messages for you.`)) return;
-                                deleteChat(String(user._id));
-                            }} aria-label={`Delete chat with ${user.fullName}`} title={`Delete chat with ${user.fullName}`} disabled={deletingUserId === String(user._id)} className={`absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 transition ${deletingUserId === String(user._id) ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                {deletingUserId === String(user._id) ? 'Deleting…' : '🗑️'}
+                                if (!confirm(`Delete ${user.fullName} from sidebar? This will remove them from your view permanently.`)) return;
+                                hideUser(String(user._id));
+                            }} aria-label={`Delete ${user.fullName} from sidebar`} title={`Delete ${user.fullName} from sidebar`} className='absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-gray-300 transition'>
+                                🗑️
                             </button>
                             {unseenMessages[user._id] > 0 &&
                                 <p className='absolute right-10 top-1/2 -translate-y-1/2 text-xs h-5 w-5

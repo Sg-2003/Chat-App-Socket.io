@@ -21,10 +21,9 @@ const RightSidebar = () => {
                 </h1>
                 <p className='px-10 mx-auto'>{selectedUser.bio}</p>
                 <hr className='border-[#ffffff50] my-4 w-full' />
-                <div className="px-5 text-xs w-full">
+                <div className="px-5 text-xs w-full flex-1 overflow-hidden flex flex-col">
                     <p>Media</p>
-                    <div className='mt-2 max-h-64 overflow-y-scroll grid grid-cols-2
-                gap-4 opacity-80'>
+                    <div className='mt-2 flex-1 overflow-y-auto grid grid-cols-2 gap-4 opacity-80'>
                         {msgImages.map((url) => (
                             <div key={url} onClick={() => window.open(url, '_blank')}
                                 className='cursor-pointer rounded'>

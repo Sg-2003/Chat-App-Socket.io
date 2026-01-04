@@ -9,30 +9,96 @@ export const getUsersForSidebar = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        // Find users who have sent or received messages from the current user
-        const usersWithMessages = await Message.distinct("senderId", { receiverId: userId });
-        const usersReceivedFrom = await Message.distinct("receiverId", { senderId: userId });
+        // Use aggregation pipeline to efficiently get all data in one query
+        const usersWithData = await User.aggregate([
+            // Match all users except the current user
+            {
+                $match: {
+                    _id: { $ne: userId }
+                }
+            },
+            // Lookup messages to calculate unseen counts and determine if chatted
+            {
+                $lookup: {
+                    from: 'messages',
+                    let: { userId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $or: [
+                                        { $and: [{ $eq: ['$senderId', '$$userId'] }, { $eq: ['$receiverId', userId] }] },
+                                        { $and: [{ $eq: ['$senderId', userId] }, { $eq: ['$receiverId', '$$userId'] }] }
+                                    ]
+                                }
+                            }
+                        },
+                        // Group to get unseen count and last message timestamp
+                        {
+                            $group: {
+                                _id: null,
+                                unseenCount: {
+                                    $sum: {
+                                        $cond: [
+                                            {
+                                                $and: [
+                                                    { $eq: ['$senderId', '$$userId'] },
+                                                    { $eq: ['$receiverId', userId] },
+                                                    { $eq: ['$seen', false] }
+                                                ]
+                                            },
+                                            1,
+                                            0
+                                        ]
+                                    }
+                                },
+                                lastMessageAt: { $max: '$createdAt' },
+                                messageCount: { $sum: 1 }
+                            }
+                        }
+                    ],
+                    as: 'messageData'
+                }
+            },
+            // Add computed fields
+            {
+                $addFields: {
+                    unseenMessages: {
+                        $ifNull: [{ $arrayElemAt: ['$messageData.unseenCount', 0] }, 0]
+                    },
+                    lastMessageAt: {
+                        $ifNull: [{ $arrayElemAt: ['$messageData.lastMessageAt', 0] }, null]
+                    },
+                    hasChatted: {
+                        $gt: [{ $ifNull: [{ $arrayElemAt: ['$messageData.messageCount', 0] }, 0] }, 0]
+                    }
+                }
+            },
+            // Remove password field
+            {
+                $project: {
+                    password: 0,
+                    messageData: 0
+                }
+            },
+            // Sort: chatted users first (by last message time), then others
+            {
+                $sort: {
+                    hasChatted: -1,
+                    lastMessageAt: -1
+                }
+            }
+        ]);
 
-        const chattedUserIdsSet = new Set([...usersWithMessages, ...usersReceivedFrom].map(id => id.toString()).filter(id => id !== userId.toString()));
-
-        // Get all other users (except the current user)
-        const allOtherUsers = await User.find({ _id: { $ne: userId } }).select("-password");
-
-        // Count number of unseen messages for each user (if any)
-        const unseenMessages = {}
-        const countPromises = allOtherUsers.map(async (user) => {
-            const count = await Message.countDocuments({ senderId: user._id, receiverId: userId, seen: false });
-            if (count > 0) unseenMessages[user._id] = count;
+        // Extract unseen messages for backward compatibility
+        const unseenMessages = {};
+        usersWithData.forEach(user => {
+            if (user.unseenMessages > 0) {
+                unseenMessages[user._id] = user.unseenMessages;
+            }
         });
-        await Promise.all(countPromises);
 
-        // Order users: first those who have chatted, then the rest
-        const chattedUsers = allOtherUsers.filter(u => chattedUserIdsSet.has(u._id.toString()));
-        const otherUsers = allOtherUsers.filter(u => !chattedUserIdsSet.has(u._id.toString()));
-
-        const orderedUsers = [...chattedUsers, ...otherUsers];
-
-        res.json({ success: true, users: orderedUsers, unseenMessages })
+        res.json({ success: true, users: usersWithData, unseenMessages })
     } catch (error) {
         console.log(error.message)
         res.json({ success: false, message: error.message })
@@ -88,7 +154,17 @@ export const sendMessage = async (req, res) => {
 
         let imageUrl;
         if (image) {
-            const uploadResponse = await cloudinary.uploader.upload(image)
+            // Upload with aggressive optimization for faster processing
+            const uploadResponse = await cloudinary.uploader.upload(image, {
+                transformation: [
+                    { width: 600, height: 600, crop: 'limit' }, // Smaller dimensions
+                    { quality: 'auto:eco' }, // Eco quality for faster loading
+                    { fetch_format: 'auto' }, // Auto format
+                    { progressive: true } // Progressive loading
+                ],
+                // Remove eager transformations to speed up upload
+                resource_type: 'auto' // Auto detect resource type
+            })
             imageUrl = uploadResponse.secure_url;
         }
         const newMessageDoc = await Message.create({

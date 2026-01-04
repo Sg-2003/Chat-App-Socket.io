@@ -4,11 +4,12 @@ import toast from 'react-hot-toast';
 import { formatMessageTime } from '../lib/utils'
 import { ChatContext } from '../../context/ChatContextCore'
 import { AuthContext } from '../../context/AuthContext'
+import imageCompression from 'browser-image-compression';
 
 const ChatContainer = () => {
 
     const { messages, users, selectedUser, setSelectedUser,
-        sendMessage, getMessages, showRightSidebar, setShowRightSidebar, setUnseenMessages } = useContext(ChatContext);
+        sendMessage, getMessages, showRightSidebar, setShowRightSidebar, setUnseenMessages, deleteChat, deletingUserId } = useContext(ChatContext);
 
     const { authUser, onlineUsers } = useContext(AuthContext);
 
@@ -31,14 +32,27 @@ const ChatContainer = () => {
             toast.error("Select an image file");
             return;
         }
-        const reader = new FileReader();
 
-        reader.onloadend = async () => {
-            await sendMessage({ image: reader.result });
-            // reset file input
-            e.target.value = null;
+        try {
+            // Compress image before sending for faster upload
+            const options = {
+                maxSizeMB: 1, // Max file size in MB
+                maxWidthOrHeight: 800, // Max width/height
+                useWebWorker: true, // Use web worker for better performance
+            };
+            const compressedFile = await imageCompression(file, options);
+
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+                await sendMessage({ image: reader.result });
+                // reset file input
+                e.target.value = null;
+            }
+            reader.readAsDataURL(compressedFile);
+        } catch (error) {
+            console.error('Error compressing image:', error);
+            toast.error("Failed to compress image");
         }
-        reader.readAsDataURL(file);
     }
 
     useEffect(() => {
@@ -65,6 +79,14 @@ const ChatContainer = () => {
                 </p>
                 <img onClick={() => setSelectedUser(null)} src={assets.arrow_icon}
                     alt="arrow-icon" className='max-w-7 md:hidden' />
+                <button
+                    onClick={() => deleteChat(selectedUser._id)}
+                    disabled={deletingUserId === selectedUser._id}
+                    className='max-w-5 max-md:hidden cursor-pointer text-red-400 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed p-1'
+                    title="Delete Chat"
+                >
+                    🗑️
+                </button>
                 <img onClick={() => setShowRightSidebar(!showRightSidebar)} src={assets.help_icon} alt="help-icon" className='max-w-5 max-md:hidden cursor-pointer' />
             </div>
             {/* -------------------chat Area------------------- */}
@@ -74,8 +96,16 @@ const ChatContainer = () => {
             ${msg.senderId !== authUser._id && 'flex-row-reverse'}`}>
                         {
                             msg.image ? (
-                                <img src={msg.image} alt="message-pic" className='max-w-57.5 border
-                border-gray-700 rounded-lg overflow-hidden mb-8'/>
+                                <img
+                                    src={msg.image}
+                                    alt="message-pic"
+                                    className='max-w-57.5 border border-gray-700 rounded-lg overflow-hidden mb-8'
+                                    loading="lazy"
+                                    onError={(e) => {
+                                        e.target.src = assets.avatar_icon; // Fallback image
+                                        e.target.alt = 'Image failed to load';
+                                    }}
+                                />
                             ) : (
                                 <p className={`p-2 max-w-50 md:text-sm font-light
                             rounded-lg mb-8 break-all bg-violet-500/30 text-white

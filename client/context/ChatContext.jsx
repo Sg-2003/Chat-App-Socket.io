@@ -12,6 +12,10 @@ export const ChatProvider = ({ children }) => {
     const [unseenMessages, setUnseenMessages] = useState({});
     const [showRightSidebar, setShowRightSidebar] = useState(false);
     const [deletingUserId, setDeletingUserId] = useState(null);
+    const [hiddenUsers, setHiddenUsers] = useState(() => {
+        const stored = localStorage.getItem('hiddenUsers');
+        return stored ? JSON.parse(stored) : [];
+    });
 
     const { socket, axios, authUser } = useContext(AuthContext);
 
@@ -121,6 +125,27 @@ export const ChatProvider = ({ children }) => {
         }
     }, [axios, selectedUser, getUsers])
 
+    //function to hide user from sidebar
+    const hideUser = useCallback((userId) => {
+        setHiddenUsers(prev => {
+            const updated = [...prev, userId];
+            localStorage.setItem('hiddenUsers', JSON.stringify(updated));
+            return updated;
+        });
+        // Clear local conversation-specific state
+        setUnseenMessages(prev => ({ ...prev, [userId]: 0 }));
+        setLastMessagedAt(prev => {
+            const copy = { ...prev };
+            delete copy[userId];
+            return copy;
+        });
+        if (selectedUser && String(selectedUser._id) === String(userId)) {
+            setSelectedUser(null);
+            setMessages([]);
+        }
+        toast.success('User hidden from sidebar');
+    }, [selectedUser])
+
     // subscribe to socket messages and clean up the specific handler
     useEffect(() => {
         if (!socket) return;
@@ -229,6 +254,8 @@ export const ChatProvider = ({ children }) => {
         setUnseenMessages,
         showRightSidebar,
         setShowRightSidebar,
+        hideUser,
+        hiddenUsers,
     }
     return (
         <ChatContext.Provider value={value}>
